@@ -24,7 +24,13 @@ namespace rbnEvo {
         private int PopSize;
         public int printGen = 0;
         static readonly Random Rand = new Random();
+        public bool[][] target;
+        public int testNum = 10;
         private StringBuilder log = new StringBuilder();
+        public int netRunTime = 100;
+        public string hamMethod = "all";
+        public double hamScale = 1;
+
         public EA(int popSize, int genLength, object[] netProps = null, double mutRate = 0.1, double cxRate = 0.2, int tournSize = 8) {
             Population = new List<Network>(popSize);
             if (ReferenceEquals(netProps, null))
@@ -44,32 +50,41 @@ namespace rbnEvo {
         public Network HOF = null;
 
 
-        public void Run(string logName = "log") {
-            try {
-
+        public void Run(string logName = "log") {           
+            
 
                 for (int gen = 0; gen < Runtime; gen++) { //good to Parralel, would need threadsafe RNG
                     Mutate();
                     //Cx();
-                    Selection();//HoF
+                    Selection();//HoF               
                     if (printGen != 0 && gen % printGen == 0)
-                        Console.WriteLine(gen); Console.WriteLine(Population.Min(ele => ele.Fitness));
-                    log.AppendLine(string.Join(",", Population.Select(net => net.Fitness)));
+                        Console.Write(gen); Console.Write(": "); //Console.WriteLine(Population.Min(ele => ele.Fitness));
+                
+                Console.WriteLine(HOF.Fitness); 
+                    log.AppendLine(string.Join(",", Population.FindAll(n=> !double.IsNaN(n.Fitness)).Select(net => net.Fitness)));
                 }
-            }
-            catch (Exception e) {
-                log.AppendLine("ERROR" + e.ToString());
-            }
+            log.AppendLine(Population.OrderBy(net => net.Fitness).First().strReprs());
+
+
             System.IO.File.WriteAllText(logName + ".txt", log.ToString());
         }
 
         private void Selection() {
             List<Network> newPop = new List<Network>(PopSize);
-            //TODO: Add HOF
+            Network best = null;
             for (int i = 0; i < PopSize; i++) {
                 Network net = Tournement();
                 newPop.Add(net);
+                Population.Remove(net);
+                if (object.ReferenceEquals(best, null) || net.Fitness < best.Fitness)
+                    best = net;                
             }
+            if (object.ReferenceEquals(HOF, null) || best.Fitness <= HOF.Fitness) {
+                HOF = best.Copy();
+                Fitness(HOF);
+            }
+            else
+                newPop.Add(HOF);
 
             Population = newPop;
 
@@ -84,21 +99,26 @@ namespace rbnEvo {
                     winner = net;
                 }
             }
+
             if (fit == double.PositiveInfinity) throw new Exception("No Individual found with fit < inf");
             return winner;
         }
         private double Fitness(Network net) {
-            if (double.IsNaN(net.Fitness))
-                net.Fitness = HammingFitn(net);
+            if (double.IsNaN(net.Fitness)) {
+                if (hamMethod == "all")
+                    net.Fitness = HammingFitn(net);
+                else
+                    net.Fitness = FullStateFitn(net);
+
+            }
             return net.Fitness;
         }
         private double HammingFitn(Network net) { //Conversions slow and unecessary //TODO: RUN length as param
-            var target = Rbn.bTarget;
-            int testNum = net.UseRandInit ? 10 : 1;
+            
             var distance = .0;
             for (int netRun = 0; netRun < testNum; netRun++) {
                 net.Reset();
-                net.Run(100, "sync");
+                net.Run(netRunTime, "sync");
                 var runOut = net.GetRunOut(target.Length);
                 //var runOut = net.MakeSpikeTrain(target[0].Length);
 
@@ -110,11 +130,28 @@ namespace rbnEvo {
             return distance / testNum;
 
         }
+        private double FullStateFitn(Network net) { //Conversions slow and unecessary //TODO: RUN length as param
+
+            var distance = .0;
+            for (int netRun = 0; netRun < testNum; netRun++) {
+                net.Reset();
+                net.Run(netRunTime, "sync");
+                var runOut = net.GetRunOut(target.Length);
+                //var runOut = net.MakeSpikeTrain(target[0].Length);
+
+                for (int i = 0; i < Rbn.target.Length; i++) {
+                    bool[] r = runOut[i].Take(target[i].Length).ToArray(); //TODO: get rid, seperate timestamp from state 
+                    distance += new BitArray(target[i]).Xor(new BitArray(r)).OfType<bool>().All(e => !e) ? 0 : 1;
+                }
+            }
+            return distance / testNum;
+
+        }
         public void Mutate() {
             for (int net = 0; net < PopSize; net++) {
                 //if (Rand.NextDouble() < MutRate)
                 Population.Add(basicMutate(Population[net].Copy()));
-                Population[net].Fitness = double.NaN;
+                //Population[net].Fitness = double.NaN; //not needed, copying creates new net thus fit = NaN in new one
             }
         }
 
